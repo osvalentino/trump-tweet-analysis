@@ -1,0 +1,199 @@
+---
+title: "Trump Data Analysis"
+date: "2024-03-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(tidytext)
+library(ggplot2)
+library(stringr)
+# SnowballC and textstem libraries
+```
+
+```{r}
+full_trump <- read.csv("tweets_01-08-2021.csv")
+trump <- full_trump %>% 
+  filter(isRetweet == "f") %>% 
+  mutate(engagements  = favorites + retweets) # new engagements column
+```
+
+```{r}
+pattern <- "http(.*)"
+trump$text <- str_replace_all(trump$text, pattern, "") #remove any image embeds
+to_keep <- c()
+to_remove <- c()
+for(i in 1:nrow(trump)) { #checks if a row is now empty because it was only an image, then stores that index
+  if(identical("",trump[i,2]) == F) {
+    to_keep <- c(to_keep, i)
+  } else {
+    to_remove <- c(to_remove, i)
+  }
+}
+
+trump <- trump[to_keep,] # remove the tweets that were only images
+trump$id <- row_number(trump)
+trump <- trump %>% select(id, text, favorites, retweets, engagements, isFlagged) #removing columns we werent using like date
+```
+
+```{r}
+trump$text <- str_replace_all(trump$text, "@\\S+", "") #removing if he tagged someone, such as "@SenTedCruz
+trump$text <- str_replace_all(trump$text, "&amp;", "") #removes the &amp; which is just R being weird
+```
+
+```{r}
+library(syuzhet)
+nrc_full <- get_nrc_sentiment(trump$text) #sentiments of first 10k tweets
+nrc_full <- cbind(nrc_full, trump$engagements) #engagements included, matched by tweet
+colnames(nrc_full)[11] <- "engagement" # rename column
+```
+
+
+
+```{r}
+#remove 0 engagement tweets
+nrc_full <- nrc_full %>% filter(engagement != 0)
+dim(nrc_full)  # 45179 tweets
+
+#new nrc with all tweets < 100 engagements removed
+nrc_100 <- nrc_full %>% filter(engagement > 100)
+dim(nrc_100) # 32123 tweets
+
+# new nrc with all tweets < 500 engagements removed
+nrc_500 <- nrc_full %>% filter(engagement > 500)
+dim(nrc_500) #26219 tweets
+```
+```{r}
+library(corrplot)
+corrplot(cor(nrc_full), method = "color") # correlation plot of the variables
+corrplot(cor(nrc_full), method = "number")
+```
+```{r}
+corrplot(cor(nrc_100), method = "color") # correlation plot of the variables
+corrplot(cor(nrc_100), method = "number")
+```
+
+```{r}
+corrplot(cor(nrc_500), method = "color") # correlation plot of the variables
+corrplot(cor(nrc_500), method = "number")
+```
+
+
+
+```{r}
+#create new column for above/below median
+#full 
+median(nrc_full$engagement)
+nrc_full <- nrc_full %>% mutate(median = ifelse(engagement < 1791, "below", "above"))
+nrc_full
+
+#100
+median(nrc_100$engagement)
+nrc_100 <- nrc_100 %>% mutate(median = ifelse(engagement < 27629, "below", "above"))
+
+# 500
+median(nrc_500$engagement)
+nrc_500 <- nrc_500 %>% mutate(median = ifelse(engagement < 55714, "below", "above"))
+```
+
+
+
+```{r}
+# full lm
+full_lm <- lm(engagement ~ anger + anticipation + disgust + fear + joy + sadness + surprise + trust + negative + positive, data = nrc_full) #overfitting
+summary(full_lm) #summary of the model
+
+# lm for 100 engagements
+lm_100 <- lm(engagement ~ anger + anticipation + disgust + fear + joy + sadness + surprise + trust + negative + positive, data = nrc_100)
+summary(lm_100)
+
+# lm for 500 engagements
+lm_500 <- lm(engagement ~ anger + anticipation + disgust + fear + joy + sadness + surprise + trust + negative + positive, data = nrc_500)
+summary(lm_500)
+
+```
+
+
+
+```{r}
+# testing and training data for full sample
+set.seed(20)
+samp_full <- sample(45389, 10000, replace = F)
+train_full <- nrc_full[samp_full,-11]
+test_full <- nrc_full[-samp_full,-11]
+
+# testing and training data for engagements > 100
+set.seed(30)
+samp_100 <- sample(32123,10000)
+train_100 <- nrc_100[samp_100,-11]
+test_100 <- nrc_100[-samp_100,-11]
+
+#testi#testi#testing and training data for engagements > 500
+set.seed(40)
+samp_500 <- sample(26219,10000)
+train_500 <- nrc_500[samp_500,-11]
+test_500 <- nrc_500[-samp_500,-11]
+
+```
+
+## Predicting with training data (full)
+```{r}
+train_full <- train_full[-which(is.na(train_full)),]
+train_full$median <- as.factor(train_full$median)
+test_full$median <- as.factor(test_full$median)
+train_full
+
+library(randomForest)
+set.seed(50)
+forest_full <- randomForest(median~., data = train_full)
+predictForest <- predict(forest_full, newdata = test_full)
+table(test_full$median, predictForest)
+
+# model_full <- lm(median ~ ., data = train_full)
+# predictFull <- predict(model_full, newdata = test_full)
+# predictFull <- ifelse(predictFull >= 1, "above", "below")
+# table(test_full$median, predictFull)
+
+
+
+(7839 + 14114) / (7839 + 14114 + 9804 + 3476) # approximately 62% accurate via random forest
+
+```
+
+## Predicting with training data (100 min engagements)
+```{r}
+which(is.na(train_100))
+ # none
+#train_100 <- train_100[-which(is.na(train_100)),]
+train_100$median <- as.factor(train_100$median)
+test_100$median <- as.factor(test_100$median)
+train_100
+
+
+set.seed(60)
+forest_100 <- randomForest(median~., data = train_100)
+predictForest100 <- predict(forest_100, newdata = test_100)
+table(test_100$median, predictForest100)
+
+(5163 + 8730) / (5163 + 8730 + 2296 + 5934) # about 62% accurate
+```
+## predicting with training > 500
+```{r}
+which(is.na(train_500))
+ # none
+#train_100 <- train_100[-which(is.na(train_100)),]
+train_500$median <- as.factor(train_500$median)
+test_500$median <- as.factor(test_500$median)
+train_500
+
+
+set.seed(70)
+forest_500 <- randomForest(median~., data = train_500)
+predictForest500 <- predict(forest_500, newdata = test_500)
+table(test_500$median, predictForest500)
+
+(4268 + 6011) / (4268 + 6011 + 2118 + 3822) #63% accurate
+```
+
+
